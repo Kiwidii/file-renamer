@@ -1,39 +1,65 @@
 #!/usr/bin/env python3
 import os
 import argparse
-import re
+from datetime import datetime
 
-def rename_files(directory , dry_run=True):
-    # resolve and validate directory (default can be ".")
+
+def rename_files(directory, dry_run=True):
     directory = os.path.abspath(os.path.expanduser(directory))
     if not os.path.isdir(directory):
         raise FileNotFoundError(f"Directory not found: {directory}")
 
-    # List all files in the directory (no subdirs)
-    files = [f for f in os.listdir(directory) if os.path.isfile(os.path.join(directory, f))]
-    # sort by modification time (oldest first)
-    files.sort(key=lambda f: os.path.getmtime(os.path.join(directory, f)))
-
-    # Define the new naming scheme (0-9 then A-Z)
-    new_char = [str(i) for i in range(10)] + [chr(ord('A') + i) for i in range(26)]
-
-    for i, filename in enumerate(files):
-        root, ext = os.path.splitext(filename)      # keep extension in `ext`
-        if len(new_char) > len(files):
-            new_name = f"{new_char[i]}{ext}"
-        else:
-            new_name = f"{new_char[0]}{new_char[i]}{ext}"  # fallback prefix + ext
-
+    single_name_limit = 36
+    month_codes = "123456789ABC"
+    files_by_month = {}
+    for filename in os.listdir(directory):
         src = os.path.join(directory, filename)
-        dst = os.path.join(directory, new_name)
+        if os.path.isfile(src):
+            modified = os.path.getmtime(src)
+            date = datetime.fromtimestamp(modified)
+            folder = f"{date.year % 10}{month_codes[date.month - 1]}"
+            files_by_month.setdefault(folder, []).append((modified, filename))
+
+    rename_plan = []
+    for folder, files in sorted(files_by_month.items()):
+        files.sort(key=lambda item: item[0])
+        width = 1 if len(files) < single_name_limit else max(
+            2, len(_base36(len(files) - 1))
+        )
+
+        for i, (_, filename) in enumerate(files):
+            _, ext = os.path.splitext(filename)
+            new_name = _base36(i).rjust(width, "0") + ext
+            src = os.path.join(directory, filename)
+            dst = os.path.join(directory, folder, new_name)
+            rename_plan.append((filename, folder, new_name, src, dst))
+
+    for filename, folder, new_name, _, dst in rename_plan:
+        if os.path.lexists(dst):
+            raise FileExistsError(f"Destination already exists: {dst}")
+
+    for filename, folder, new_name, src, dst in rename_plan:
         if dry_run:
-            print(f"[dry-run] Would rename: '{filename}' -> '{new_name}'")
+            print(f"[dry-run] Would rename: '{filename}' -> '{folder}/{new_name}'")
         else:
             try:
+                os.makedirs(os.path.dirname(dst), exist_ok=True)
                 os.rename(src, dst)
-                print(f"Renamed: '{filename}' -> '{new_name}'")
+                print(f"Renamed: '{filename}' -> '{folder}/{new_name}'")
             except Exception as e:
                 print(f"Error renaming '{filename}': {e}")
+
+
+def _base36(number):
+    characters = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+    if number == 0:
+        return "0"
+    result = ""
+    while number:
+        number, remainder = divmod(number, len(characters))
+        result = characters[remainder] + result
+    return result
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Show or apply file renames (local use).")
